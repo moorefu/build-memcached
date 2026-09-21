@@ -136,6 +136,7 @@ jobs:
           path: |
             memcached-*-linux-glibc2.17-${{ matrix.arch }}-openssl-*.tar.xz
             memcached-*-linux-glibc2.17-${{ matrix.arch }}-openssl-*.tar.xz.sha256
+            benchmark-*.txt
 
   build-windows:
     needs: prepare
@@ -145,7 +146,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # MSYS2 运行时工具链(完整 POSIX): memcached 是纯 Unix 代码, mingw64 缺
-      # sys/socket.h 等头文件。依赖用 msys2 系统包(libevent/openssl 3.x/cyrus-sasl),
+      # sys/socket.h 等头文件。libevent/openssl 用 msys2 系统包; cyrus-sasl
+      # 由构建脚本从源码静态编译(PLAIN 内置, 系统 libsasl 不再需要)。
       # memcached 官方发布包自带 configure(自带 autotools 产物, msys2 的
       # autoconf 2.73 不兼容其 configure.ac), 无需安装 autotools。
       - uses: msys2/setup-msys2@v2
@@ -157,6 +159,7 @@ jobs:
             gcc
             gperf
             perl
+            perl-URI
             python
             zip
             curl
@@ -164,8 +167,6 @@ jobs:
             libevent-devel
             libopenssl
             openssl-devel
-            libsasl
-            libsasl-devel
 
       - name: Build with MSYS2
         shell: msys2 {0}
@@ -181,6 +182,7 @@ jobs:
           path: |
             memcached-*-windows-x86_64-msys2.zip
             memcached-*-windows-x86_64-msys2.zip.sha256
+            benchmark-*.txt
 
   release:
     needs: [prepare, build-linux, build-windows]
@@ -194,6 +196,19 @@ jobs:
 
       - uses: actions/download-artifact@v4
 
+      - name: Compose release body with benchmark results
+        run: |
+          {
+            echo "## 基准测试结果"
+            echo
+            echo "共享 CI runner 上的参考数字, 波动较大, 仅供版本间粗对比。"
+            for f in */benchmark-*.txt; do
+              [ -f "$f" ] || continue
+              cat "$f"
+              echo
+            done
+          } > release_body.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -202,6 +217,7 @@ jobs:
           tag_name: ${{ env.VERSION }}
           make_latest: "${{ inputs.make_latest }}"
           prerelease: ${{ inputs.prerelease }}
+          body_path: release_body.md
           files: |
             memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64-openssl-${{ env.OS_VER }}.tar.xz
             memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64-openssl-${{ env.OS_VER }}.tar.xz.sha256

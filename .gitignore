@@ -5,3 +5,8 @@ memcached-*/
 *.tar.xz.sha256
 *.zip
 *.zip.sha256
+# 本地跑基准产生的结果文件
+benchmark-*.txt
+# 本地验证冒烟时的临时目录
+.win-smoke/
+__pycache__/

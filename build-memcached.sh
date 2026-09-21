@@ -49,7 +49,9 @@ for dts in /opt/rh/devtoolset-*/enable; do
 done
 
 log "安装构建工具"
-yum install -y curl pkgconfig perl-core autoconf automake libtool gperf
+# libevent-devel: 基准工具 mc-crusher 的编译依赖 (memcached 本身用静态自编 libevent)
+# perl-URI: 冒烟中 memcached-tool 的依赖 (URI::Escape)
+yum install -y curl pkgconfig perl-core autoconf automake libtool gperf libevent-devel perl-URI
 # OpenSSL 3.x 的 Configure 额外依赖 IPC::Cmd/Text::Template/Time::Piece(epel 提供);
 # EPEL7 已 EOL, 源切到阿里云 epel-archive(含 x86_64/aarch64), 只动 epel 不动基础源。
 if [ "${OS_VER%%.*}" = "3" ]; then
@@ -144,8 +146,8 @@ if [ ! -f "$DEPS/cyrus-sasl/lib/libsasl2.a" ]; then
   cd "$DEPS"
 fi
 
-# 静态插件表是否真的包含 PLAIN
-if ! nm "$DEPS/cyrus-sasl/lib/libsasl2.a" 2>/dev/null | grep -q 'plain_server_plug_init'; then
+# 静态插件表是否真的包含 PLAIN (前缀匹配覆盖 plug_init/pluginit 两种符号形态)
+if ! nm "$DEPS/cyrus-sasl/lib/libsasl2.a" 2>/dev/null | grep -q 'plain_server_plug'; then
   echo "错误: PLAIN 机制未被编入静态 libsasl2.a" >&2
   exit 1
 fi
@@ -174,6 +176,16 @@ patch -p1 --fuzz=3 < "$SCRIPT_DIR/patches/sasl_defs-portable.patch"
   LIBS="-lpthread -ldl"
 make -j"$NPROC"
 
+# ---------- L0: 官方 testapp 冒烟 ----------
+# 发布包自带纯 C 测试程序 testapp(56 个用例: 二进制协议全套 + 单元测试),
+# 自拉起 memcached-debug 实例, 不依赖 perl; sizes 打印关键结构体大小。
+# 注意: 不用 `make test` —— 它在 --enable-tls 下还会跑 perl TLS 套件(需
+# IO::Socket::SSL), 超出 L0 定位且环境依赖重; TLS 由 L1 冒烟覆盖。
+log "L0 官方冒烟 (testapp + sizes)"
+make -j"$NPROC" testapp sizes
+./sizes
+./testapp
+
 # ---------- 便携性验证 ----------
 log "检查动态依赖 (只允许 glibc 家族)"
 ldd memcached
@@ -184,80 +196,15 @@ if [ -n "$BAD" ]; then
   exit 1
 fi
 
-log "SASL PLAIN 认证功能测试"
-PY="$(command -v python3 || command -v python2 || true)"
-if [ -z "$PY" ]; then
-  PY="$(ls /opt/python/cp3*/bin/python3 2>/dev/null | head -1 || true)"
-fi
-if [ -z "$PY" ]; then
-  echo "错误: 容器内找不到 python, 无法执行 SASL 功能测试" >&2
-  exit 1
-fi
-cat > /tmp/sasl_test.py <<'EOF'
-import socket, struct, sys
+# ---------- L1: 冒烟测试 ----------
+# 多配置实例(普通/小内存逐出/TLS/SASL/seccomp)的协议级断言, 详见 smoke-test.sh
+log "L1 冒烟测试 (协议/TLS/SASL/逐出/seccomp)"
+bash "$SCRIPT_DIR/smoke-test.sh" "$PWD/memcached" "$PWD"
 
-HOST, PORT = '127.0.0.1', 11311
-
-def send_pkt(s, opcode, key=b'', val=b''):
-    total = len(key) + len(val)
-    hdr = struct.pack('!BBHBBHIIQ', 0x80, opcode, len(key), 0, 0, 0, total, 0, 0)
-    s.sendall(hdr + key + val)
-
-def recv_pkt(s):
-    hdr = b''
-    while len(hdr) < 24:
-        c = s.recv(24 - len(hdr))
-        if not c: raise IOError('connection closed')
-        hdr += c
-    magic, op, keyl, extl, dtype, status, rest, opaque, cas = struct.unpack('!BBHBBHIIQ', hdr)
-    body = b''
-    while len(body) < rest:
-        c = s.recv(rest - len(body))
-        if not c: raise IOError('connection closed')
-        body += c
-    return status, body
-
-# 1) list mechanisms: statically built-in PLAIN must be present
-s = socket.create_connection((HOST, PORT), 5)
-send_pkt(s, 0x20)
-status, body = recv_pkt(s)
-if status != 0:
-    sys.exit('FAIL: list mechanisms failed, status=%d' % status)
-print('mechanisms:', body.split())
-if b'PLAIN' not in body.split():
-    sys.exit('FAIL: PLAIN mechanism missing')
-s.close()
-
-# 2) correct credentials must authenticate
-s = socket.create_connection((HOST, PORT), 5)
-send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00testpass')
-status, body = recv_pkt(s)
-print('auth(correct password) status =', status)
-if status != 0:
-    sys.exit('FAIL: PLAIN auth failed with correct password, status=%d' % status)
-s.close()
-
-# 3) wrong credentials must be rejected
-s = socket.create_connection((HOST, PORT), 5)
-send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00wrongpass')
-status, body = recv_pkt(s)
-print('auth(wrong password) status =', status)
-if status == 0:
-    sys.exit('FAIL: wrong password was accepted')
-s.close()
-print('SASL PLAIN: all tests passed')
-EOF
-printf 'testuser:testpass\n' > /tmp/memcached-sasl-pwdb
-MEMCACHED_SASL_PWDB=/tmp/memcached-sasl-pwdb ./memcached -S -u root -p 11311 -U 0 -m 64 -v &
-MC_PID=$!
-trap 'kill $MC_PID 2>/dev/null || true' EXIT
-for _ in $(seq 1 50); do
-  if (exec 3<>/dev/tcp/127.0.0.1/11311) 2>/dev/null; then break; fi
-  sleep 0.2
-done
-"$PY" /tmp/sasl_test.py
-kill $MC_PID
-trap - EXIT
+# ---------- L2: 基准测试 ----------
+# mc-crusher 四场景吞吐, 结果写入 benchmark-<平台>-<架构>.txt (非门禁, 含残废检测)
+log "L2 基准测试 (mc-crusher)"
+bash "$SCRIPT_DIR/benchmark.sh" "$PWD/memcached"
 
 # ---------- 打包 ----------
 # 包内顶层目录用纯版本名 memcached-<version>, 压缩包文件名保留平台/依赖版本后缀
