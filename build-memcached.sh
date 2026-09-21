@@ -61,7 +61,19 @@ if [ "${OS_VER%%.*}" = "3" ]; then
            -e 's|dl.fedoraproject.org/pub/epel/7|mirrors.aliyun.com/epel-archive/7|g' \
            /etc/yum.repos.d/epel.repo || true
   fi
-  yum install -y perl-devel perl-IPC-Cmd perl-Text-Template perl-Time-Piece
+  yum install -y perl-devel perl-IPC-Cmd perl-Text-Template perl-Time-Piece || true
+  # OpenSSL 3.5+ 要求 Text::Template >= 1.46, EPEL7 仓库只有 1.45,
+  # 不满足时从 CPAN 镜像装单文件模块兜底
+  if ! perl -MText::Template -e 'exit(($Text::Template::VERSION >= 1.46) ? 0 : 1)' 2>/dev/null; then
+    log "安装 Text::Template >= 1.46 (CPAN 单文件模块)"
+    (
+      cd /tmp
+      download "https://mirrors.aliyun.com/CPAN/authors/id/M/MJ/MJD/Text-Template-1.46.tar.gz"
+      tar -xzf Text-Template-1.46.tar.gz
+      install -D -m 644 Text-Template-1.46/lib/Text/Template.pm \
+        /usr/share/perl5/vendor_perl/Text/Template.pm
+    )
+  fi
 fi
 
 mkdir -p "$DEPS"
