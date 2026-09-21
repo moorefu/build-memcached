@@ -86,8 +86,8 @@ if [ ! -f "$DEPS/cyrus-sasl/lib/libsasl2.a" ]; then
     --disable-staticdlopen \
     --with-dblib=none \
     --without-openssl
-  make -j$(nproc)
-  make install
+  make -j$(nproc) SUBDIRS="include common lib"
+  make SUBDIRS="include lib" install
   cd "$SCRIPT_DIR"
 fi
 

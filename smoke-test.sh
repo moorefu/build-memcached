@@ -57,15 +57,22 @@ wait_port() {
 start_mc() {
   local port="$1"; shift
   log "启动实例 (端口 $port${*:+, 参数: $*})"
-  # stdout/stderr 丢弃: 避免后台实例持有输出管道写端, 拖住外层管道 (如 | tail)
+  # 输出重定向到日志文件: 既避免后台实例持有输出管道写端拖住外层管道
+  # (如 | tail), 又在实例意外退出时能输出诊断信息
+  local mclog="/tmp/mc-smoke-$port.log"
+  rm -f "$mclog"
   if [ "$IS_WIN" = 1 ]; then
-    "$BIN" -p "$port" -U 0 "$@" > /dev/null 2>&1 &
+    "$BIN" -p "$port" -U 0 "$@" > "$mclog" 2>&1 &
   else
-    "$BIN" -u root -p "$port" -U 0 "$@" > /dev/null 2>&1 &
+    "$BIN" -u root -p "$port" -U 0 "$@" > "$mclog" 2>&1 &
   fi
   LAST_PID=$!
   PIDS="$PIDS $LAST_PID"
-  wait_port "$port"
+  if ! wait_port "$port"; then
+    echo "----- 实例日志 ($mclog) -----" >&2
+    cat "$mclog" >&2 || true
+    return 1
+  fi
 }
 
 log "版本检查: $("$BIN" --version)"

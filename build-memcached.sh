@@ -120,6 +120,14 @@ if [ ! -f "$DEPS/libseccomp/lib/libseccomp.a" ]; then
   make install
   cd "$DEPS"
 fi
+# libseccomp 的裸名全局符号 hash 与 memcached hash.c 的全局函数指针 hash 冲突:
+# 静态链接时 libseccomp 内部对 hash() 的调用会被解析到 memcached 的变量地址,
+# seccomp_load (即 -o drop_privileges) 直接 segfault。重命名库内该符号,
+# 库内引用同步更新, 与 memcached 符号彻底隔离。
+if nm "$DEPS/libseccomp/lib/libseccomp.a" 2>/dev/null | grep -q ' T hash$'; then
+  log "重命名 libseccomp 裸名符号 hash (避免与 memcached 全局符号冲突)"
+  objcopy --redefine-sym hash=libseccomp_hash "$DEPS/libseccomp/lib/libseccomp.a"
+fi
 
 # ---------- 静态 cyrus-sasl (PLAIN 机制编入库内) ----------
 if [ ! -f "$DEPS/cyrus-sasl/lib/libsasl2.a" ]; then
