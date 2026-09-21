@@ -2,7 +2,7 @@
 set -e
 
 # Usage: ./build-memcached.sh <version> [openssl-ver] [libevent-ver] [libseccomp-ver] [cyrus-sasl-ver] [arch]
-# Example: ./build-memcached.sh 1.6.45 3.5.6 2.1.12-stable 2.5.5 2.1.28 x86_64
+# Example: ./build-memcached.sh 1.6.45 1.1.1w 2.1.12-stable 2.5.5 2.1.28 x86_64
 #
 # 在 manylinux2014 (glibc 2.17) 容器内运行, 构建完全便携的 memcached:
 # 除 glibc 外全部静态链入二进制 (OpenSSL/libevent/libseccomp/cyrus-sasl),
@@ -12,9 +12,10 @@ set -e
 #
 # memcached 取官方发布包(memcached.org/files, 自带 configure, 无需 autotools);
 # 不同版本通过第一个参数指定。sasl_defs.c 的两处便携改动见 patches/。
+# 注: manylinux2014 镜像自带的 yum 源(vault)在 x86_64/aarch64 均可用, 无需换源。
 
 VERSION="${1:?Usage: $0 <version> [openssl-ver] [libevent-ver] [libseccomp-ver] [cyrus-sasl-ver] [arch]}"
-OS_VER="${2:-3.5.6}"
+OS_VER="${2:-1.1.1w}"
 LIBEVENT_VER="${3:-2.1.12-stable}"
 LIBSECCOMP_VER="${4:-2.5.5}"
 CYRUS_SASL_VER="${5:-2.1.28}"
@@ -47,11 +48,13 @@ for dts in /opt/rh/devtoolset-*/enable; do
   if [ -f "$dts" ]; then set +u; . "$dts"; set -u; break; fi
 done
 
-log "安装构建工具 (OpenSSL 3.x 的 Configure 依赖 IPC::Cmd/Text::Template/Time::Piece)"
-yum install -y epel-release
-yum install -y curl pkgconfig perl-core perl-devel \
-  perl-IPC-Cmd perl-Text-Template perl-Time-Piece \
-  autoconf automake libtool gperf
+log "安装构建工具"
+yum install -y curl pkgconfig perl-core autoconf automake libtool gperf
+# OpenSSL 3.x 的 Configure 额外依赖 IPC::Cmd/Text::Template/Time::Piece(epel 提供);
+# 默认的 OpenSSL 1.1.1 只需 perl-core。
+if [ "${OS_VER%%.*}" = "3" ]; then
+  yum install -y epel-release perl-devel perl-IPC-Cmd perl-Text-Template perl-Time-Piece
+fi
 
 mkdir -p "$DEPS"
 cd "$DEPS"

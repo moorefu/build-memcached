@@ -12,7 +12,7 @@ on:
       openssl_version:
         required: false
         type: string
-        default: '3.5.6'
+        default: '1.1.1w'
       libevent_version:
         required: false
         type: string
@@ -49,7 +49,7 @@ on:
         description: 'OpenSSL version (Linux static)'
         required: false
         type: string
-        default: '3.5.6'
+        default: '1.1.1w'
       libevent_version:
         description: 'libevent version (Linux static)'
         required: false
@@ -127,7 +127,7 @@ jobs:
             -e BIND_VERSION -e OS_VER -e LIBEVENT_VER -e LIBSECCOMP_VER -e CYRUS_SASL_VER -e ARCH \
             -v "$(pwd)":/work -w /work \
             ${{ matrix.image }} \
-            bash -c 'bash ci-fix-yum-repos.sh && bash build-memcached.sh "$BIND_VERSION" "$OS_VER" "$LIBEVENT_VER" "$LIBSECCOMP_VER" "$CYRUS_SASL_VER" "$ARCH"'
+            bash build-memcached.sh "$BIND_VERSION" "$OS_VER" "$LIBEVENT_VER" "$LIBSECCOMP_VER" "$CYRUS_SASL_VER" "$ARCH"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
