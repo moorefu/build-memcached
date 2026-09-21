@@ -54,19 +54,29 @@ done
 log "安装构建工具"
 # libevent-devel: 基准工具 mc-crusher 的编译依赖 (memcached 用包内自编 libevent)
 # perl-URI: 冒烟中 memcached-tool 的依赖 (URI::Escape)
-# patchelf: 打包时把 rpath 改写为 $ORIGIN 相对路径;
-#   x86_64 镜像预装 / vault 源可装, aarch64 两者皆无 → 源码编译兜底
-yum install -y curl pkgconfig perl-core autoconf automake libtool gperf libevent-devel perl-URI patchelf || true
+# 注意 patchelf 不在 yum 列表: aarch64 仓库无此包, yum 会因缺名整批中止
+yum install -y curl pkgconfig perl-core autoconf automake libtool gperf libevent-devel perl-URI
+# patchelf (打包时改写 rpath 为 $ORIGIN 相对路径):
+# x86_64/aarch64 镜像均预装; 若无则下载官方二进制 (glibc 2.17 可运行,
+# 已实测), 二进制异常时再源码编译兜底
 if ! command -v patchelf >/dev/null 2>&1; then
-  log "源码编译 patchelf (仓库源无此包)"
   (
     cd /tmp
-    download "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0.tar.gz"
-    tar -xzf patchelf-0.18.0.tar.gz
-    cd patchelf-0.18.0
-    ./configure --prefix=/usr/local
-    make -j"$NPROC"
-    make install
+    rm -rf patchelf-bin && mkdir patchelf-bin
+    download "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-$ARCH.tar.gz"
+    tar -xzf "patchelf-0.18.0-$ARCH.tar.gz" -C patchelf-bin
+    if ./patchelf-bin/bin/patchelf --version >/dev/null 2>&1; then
+      log "安装官方 patchelf 二进制"
+      install -m 755 patchelf-bin/bin/patchelf /usr/local/bin/patchelf
+    else
+      log "官方 patchelf 二进制不可运行, 源码编译"
+      download "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0.tar.gz"
+      tar -xzf patchelf-0.18.0.tar.gz
+      cd patchelf-0.18.0
+      ./configure --prefix=/usr/local
+      make -j"$NPROC"
+      make install
+    fi
   )
 fi
 command -v patchelf >/dev/null 2>&1 || { echo "错误: 需要 patchelf" >&2; exit 1; }
