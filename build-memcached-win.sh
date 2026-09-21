@@ -182,10 +182,14 @@ sha256sum "$DIST.zip" > "$DIST.zip.sha256"
 # 把产物解包到临时目录, 用 SASL_PATH 指向不存在目录以屏蔽构建环境的
 # 系统插件路径, 模拟裸 Windows "解压即用": SASL 只能靠静态内置的 PLAIN 工作,
 # 从而防止构建环境的系统插件再次掩盖插件路径类缺陷。其余冒烟组顺带复测。
+# 解压用 python -m zipfile (msys2 默认无 unzip 包); 目录用 cwd 相对路径,
+# 避免 msys/mingw 两套 python 对 /tmp 绝对路径解析不一致。
 log "解压场景验证 (屏蔽系统 SASL 插件路径)"
-VERIFY=/tmp/mc-verify-unpack
+PYBIN="$(command -v python3 || command -v python || true)"
+[ -n "$PYBIN" ] || { echo "错误: 找不到 python" >&2; exit 1; }
+VERIFY=.mc-verify-unpack
 rm -rf "$VERIFY"; mkdir -p "$VERIFY"
-unzip -q "$DIST.zip" -d "$VERIFY"
+"$PYBIN" -m zipfile -e "$DIST.zip" "$VERIFY/"
 ( cd "$VERIFY/$INNER" && SASL_PATH=/nonexistent \
     bash "$SCRIPT_DIR/smoke-test.sh" "$PWD/bin/memcached.exe" "$PWD" )
 rm -rf "$VERIFY"
