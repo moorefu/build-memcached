@@ -2,20 +2,20 @@
 set -e
 
 # Usage: ./build-memcached.sh <version> [openssl-ver] [libevent-ver] [libseccomp-ver] [cyrus-sasl-ver] [arch]
-# Example: ./build-memcached.sh 1.6.45 1.1.1w 2.1.12-stable 2.5.5 2.1.28 x86_64
+# Example: ./build-memcached.sh 1.6.45 3.5.6 2.1.12-stable 2.5.5 2.1.28 x86_64
 #
 # 在 manylinux2014 (glibc 2.17) 容器内运行, 构建完全便携的 memcached:
 # 除 glibc 外全部静态链入二进制 (OpenSSL/libevent/libseccomp/cyrus-sasl),
 # cyrus-sasl 的 PLAIN 认证机制直接编入, 目标机器无需安装任何依赖。
-# 产出 memcached-<版本>-linux-glibc2.17-<架构>-openssl-<ssl版本>.tar.xz (+ .sha256)
-# 目录布局: bin / include / share(doc, man)
+# 产出 memcached-<版本>-linux-glibc2.17-<架构>-openssl-<ssl版本>.tar.xz (+ .sha256),
+# 包内顶层目录为纯版本名: memcached-<版本>/{bin,include,share}。
 #
 # memcached 取官方发布包(memcached.org/files, 自带 configure, 无需 autotools);
 # 不同版本通过第一个参数指定。sasl_defs.c 的两处便携改动见 patches/。
 # 注: manylinux2014 镜像自带的 yum 源(vault)在 x86_64/aarch64 均可用, 无需换源。
 
 VERSION="${1:?Usage: $0 <version> [openssl-ver] [libevent-ver] [libseccomp-ver] [cyrus-sasl-ver] [arch]}"
-OS_VER="${2:-1.1.1w}"
+OS_VER="${2:-3.5.6}"
 LIBEVENT_VER="${3:-2.1.12-stable}"
 LIBSECCOMP_VER="${4:-2.5.5}"
 CYRUS_SASL_VER="${5:-2.1.28}"
@@ -51,9 +51,17 @@ done
 log "安装构建工具"
 yum install -y curl pkgconfig perl-core autoconf automake libtool gperf
 # OpenSSL 3.x 的 Configure 额外依赖 IPC::Cmd/Text::Template/Time::Piece(epel 提供);
-# 默认的 OpenSSL 1.1.1 只需 perl-core。
+# EPEL7 已 EOL, 源切到阿里云 epel-archive(含 x86_64/aarch64), 只动 epel 不动基础源。
 if [ "${OS_VER%%.*}" = "3" ]; then
-  yum install -y epel-release perl-devel perl-IPC-Cmd perl-Text-Template perl-Time-Piece
+  yum install -y epel-release
+  if [ -f /etc/yum.repos.d/epel.repo ]; then
+    sed -i -e 's|^mirrorlist=|#mirrorlist=|' \
+           -e 's|^#baseurl=|baseurl=|' \
+           -e 's|download.fedoraproject.org/pub/epel/7|mirrors.aliyun.com/epel-archive/7|g' \
+           -e 's|dl.fedoraproject.org/pub/epel/7|mirrors.aliyun.com/epel-archive/7|g' \
+           /etc/yum.repos.d/epel.repo || true
+  fi
+  yum install -y perl-devel perl-IPC-Cmd perl-Text-Template perl-Time-Piece
 fi
 
 mkdir -p "$DEPS"
@@ -240,15 +248,17 @@ kill $MC_PID
 trap - EXIT
 
 # ---------- 打包 ----------
+# 包内顶层目录用纯版本名 memcached-<version>, 压缩包文件名保留平台/依赖版本后缀
 log "打包"
 DIST="memcached-$VERSION-linux-glibc2.17-$ARCH-openssl-$OS_VER"
-rm -rf "$DIST" "$DIST.tar.xz" "$DIST.tar.xz.sha256"
-mkdir -p "$DIST/bin" "$DIST/include" "$DIST/share/doc" "$DIST/share/man/man1"
-cp memcached "$DIST/bin/"
-cp scripts/memcached-tool "$DIST/bin/"
-cp COPYING "$DIST/share/doc/LICENSE"
-cp doc/memcached.1 "$DIST/share/man/man1/"
-cat > "$DIST/share/doc/README.txt" <<EOF
+INNER="memcached-$VERSION"
+rm -rf "$INNER" "$DIST.tar.xz" "$DIST.tar.xz.sha256"
+mkdir -p "$INNER/bin" "$INNER/include" "$INNER/share/doc" "$INNER/share/man/man1"
+cp memcached "$INNER/bin/"
+cp scripts/memcached-tool "$INNER/bin/"
+cp COPYING "$INNER/share/doc/LICENSE"
+cp doc/memcached.1 "$INNER/share/man/man1/"
+cat > "$INNER/share/doc/README.txt" <<EOF
 memcached $VERSION 便携版 (Linux $ARCH, glibc >= 2.17)
 
 标准前缀布局 (bin/include/share), 单二进制, 解压即用, 目标系统无需安装任何依赖库。
@@ -271,7 +281,7 @@ SASL 认证 (-S, 二进制协议客户端):
   include/ 占位 (memcached 无对外 API 头文件)
   share/   文档(doc), 手册页(man), LICENSE
 EOF
-tar -cJf "$DIST.tar.xz" "$DIST"
+tar -cJf "$DIST.tar.xz" "$INNER"
 sha256sum "$DIST.tar.xz" > "$DIST.tar.xz.sha256"
 
 # 输出移到工程根目录

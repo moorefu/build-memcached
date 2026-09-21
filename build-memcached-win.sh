@@ -122,19 +122,21 @@ kill $MC_PID
 trap - EXIT
 
 # ---------- 打包 ----------
+# 包内顶层目录用纯版本名 memcached-<version>, zip 文件名保留平台后缀
 log "打包"
 DIST="memcached-$VERSION-windows-$ARCH-msys2"
-rm -rf "$DIST" "$DIST.zip" "$DIST.zip.sha256"
-mkdir -p "$DIST/bin" "$DIST/include" "$DIST/share/doc" "$DIST/share/sasl2"
-cp memcached.exe "$DIST/bin/"
+INNER="memcached-$VERSION"
+rm -rf "$INNER" "$DIST.zip" "$DIST.zip.sha256"
+mkdir -p "$INNER/bin" "$INNER/include" "$INNER/share/doc" "$INNER/share/sasl2"
+cp memcached.exe "$INNER/bin/"
 # 打包 msys 运行时依赖 DLL 到 bin/ (exe 同目录自动加载), 解压即用
 for dll in $(ldd memcached.exe | grep -oE '/usr/bin/[^ ]+\.dll' | sort -u); do
-  cp "$dll" "$DIST/bin/"
+  cp "$dll" "$INNER/bin/"
 done
 # SASL 机制插件(可选; PLAIN 已内置于 msys libsasl2)
-cp /usr/lib/sasl2/*.dll "$DIST/share/sasl2/" 2>/dev/null || true
-cp COPYING "$DIST/share/doc/LICENSE"
-cat > "$DIST/share/doc/README.txt" <<EOF
+cp /usr/lib/sasl2/*.dll "$INNER/share/sasl2/" 2>/dev/null || true
+cp COPYING "$INNER/share/doc/LICENSE"
+cat > "$INNER/share/doc/README.txt" <<EOF
 memcached $VERSION Windows 版 (x86_64, MSYS2 运行时)
 
 标准前缀布局 (bin/include/share), 自带运行所需全部 DLL
@@ -159,7 +161,7 @@ TLS: 完整支持 (openssl 3.x 随包提供)。
   include/ 占位 (memcached 无对外 API 头文件)
   share/   文档(doc), SASL 机制插件(sasl2, 可选)
 EOF
-zip -q -r "$DIST.zip" "$DIST"
+zip -q -r "$DIST.zip" "$INNER"
 sha256sum "$DIST.zip" > "$DIST.zip.sha256"
 
 mv "$DIST.zip" "$DIST.zip.sha256" "$SCRIPT_DIR/"
