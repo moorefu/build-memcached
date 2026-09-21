@@ -105,6 +105,10 @@ cd "memcached-$VERSION"
 
 log "应用便携补丁 patches/sasl_defs-portable.patch"
 patch -p1 --fuzz=3 < "$SCRIPT_DIR/patches/sasl_defs-portable.patch"
+# 插件路径补丁: Linux 动态 sasl 用; Windows 静态 sasl 下无害(静态表优先),
+# msys 工具链下 /proc/self/exe 与 readlink 均可用, 保持两平台补丁一致
+log "应用插件路径补丁 patches/sasl_defs-plugin-path.patch"
+patch -p1 --fuzz=3 < "$SCRIPT_DIR/patches/sasl_defs-plugin-path.patch"
 
 # 显式指向 MSYS gcc (MINGW64 环境下默认 gcc 是 mingw 编译器, 缺 POSIX 头)。
 # SASL 用静态库全路径: msys ld 对 -lsasl2 优先命中系统 libsasl2.dll.a(动态),

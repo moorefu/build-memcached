@@ -1,0 +1,55 @@
+--- a/sasl_defs.c	2026-09-21 14:01:39.004143500 +0800
++++ b/sasl_defs.c	2026-09-21 14:02:43.846079600 +0800
+@@ -4,6 +4,8 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sasl/saslplug.h>
++#include <limits.h>
++#include <unistd.h>
+ 
+ char my_sasl_hostname[1025];
+ 
+@@ -171,6 +173,33 @@
+     return SASL_OK;
+ }
+ 
++/* 便携版改动: SASL 插件目录指向 <包根>/bin/../lib/sasl2 (由 /proc/self/exe
++ * 推导)。动态链接 cyrus-sasl 时 PLAIN 等机制插件随包分发, 用此回调让库
++ * 从包内目录加载, 解压即用、无需设置 SASL_PATH。定位失败返回 SASL_FAIL,
++ * cyrus-sasl 回退到默认插件路径。 */
++static char sasl_plugin_dir[PATH_MAX];
++static int sasl_getpluginpath(void *context, const char **path)
++{
++    (void)context;
++    ssize_t len = readlink("/proc/self/exe", sasl_plugin_dir,
++                           sizeof(sasl_plugin_dir) - 1);
++    if (len <= 0) {
++        return SASL_FAIL;
++    }
++    sasl_plugin_dir[len] = '\0';
++    char *slash = strrchr(sasl_plugin_dir, '/');
++    if (slash == NULL) {
++        return SASL_FAIL;
++    }
++    *slash = '\0';
++    if (strlen(sasl_plugin_dir) + sizeof("/../lib/sasl2") > sizeof(sasl_plugin_dir)) {
++        return SASL_FAIL;
++    }
++    strcat(sasl_plugin_dir, "/../lib/sasl2");
++    *path = sasl_plugin_dir;
++    return SASL_OK;
++}
++
+ static sasl_callback_t sasl_callbacks[] = {
+ #ifdef ENABLE_SASL_PWDB
+    { SASL_CB_SERVER_USERDB_CHECKPASS, (sasl_callback_ft)sasl_server_userdb_checkpass, NULL },
+@@ -178,6 +207,9 @@
+ 
+    { SASL_CB_LOG, (sasl_callback_ft)sasl_log, NULL },
+ 
++   /* 便携版改动: 见 sasl_getpluginpath */
++   { SASL_CB_GETPATH, (sasl_callback_ft)sasl_getpluginpath, NULL },
++
+ #ifdef HAVE_SASL_CB_GETCONF
+    { SASL_CB_GETCONF, sasl_getconf, NULL },
+ #else

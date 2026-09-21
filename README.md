@@ -2,21 +2,23 @@
 
 把 [memcached](https://memcached.org) 官方源码编译成**免依赖、解压即用**的二进制发布包：
 
-- **Linux**：在 manylinux2014（glibc 2.17 基线）容器内构建，除 glibc 外全部静态链入
-  （OpenSSL / libevent / libseccomp / cyrus-sasl），单二进制，CentOS/RHEL 7 及更新版本可直接运行，
-  目标机器无需安装任何依赖库。
+- **Linux**：在 manylinux2014（glibc 2.17 基线）容器内构建。OpenSSL / libevent /
+  libseccomp / cyrus-sasl 以**动态链接**方式随包分发（`.so` 位于包内 `lib/` 目录），
+  二进制 rpath 指向 `$ORIGIN/../lib`（相对路径，不依赖系统安装），目标机器只需
+  glibc >= 2.17，无需安装任何依赖库。cyrus-sasl 的 PLAIN 机制插件位于包内
+  `lib/sasl2/`，由程序按自身位置自动定位（无需 SASL_PATH）。
 - **Windows**：基于 MSYS2 POSIX 运行时工具链构建，源码零改动，SASL/TLS 全可用，
   运行时 DLL（`msys-2.0.dll` 等）随包打进 `bin/`，无需安装 MSYS2。
 
-SASL PLAIN 认证机制直接编入二进制并附带端到端功能测试；TLS（`--enable-tls`）与
-seccomp 沙箱（`--enable-seccomp`，仅 Linux）完整支持。
+SASL PLAIN 认证、TLS（`--enable-tls`）与 seccomp 沙箱（`--enable-seccomp`，仅 Linux）
+完整支持，打包后自动做**解压场景验证**（解包产物 + 屏蔽系统插件路径跑全套冒烟）。
 
 ## 构建产物
 
 | 平台 | 文件 | 说明 |
 | --- | --- | --- |
-| Linux x86_64 | `memcached-<版本>-linux-glibc2.17-x86_64-openssl-<SSL版本>.tar.xz` | 单二进制，静态链接 |
-| Linux aarch64 | `memcached-<版本>-linux-glibc2.17-aarch64-openssl-<SSL版本>.tar.xz` | 单二进制，静态链接 |
+| Linux x86_64 | `memcached-<版本>-linux-glibc2.17-x86_64-openssl-<SSL版本>.tar.xz` | 依赖 .so 随包（lib/），rpath 定位 |
+| Linux aarch64 | `memcached-<版本>-linux-glibc2.17-aarch64-openssl-<SSL版本>.tar.xz` | 依赖 .so 随包（lib/），rpath 定位 |
 | Windows x86_64 | `memcached-<版本>-windows-x86_64-msys2.zip` | 附带 MSYS2 运行时 DLL |
 
 每个压缩包均附带同名 `.sha256` 校验文件。包内顶层目录为纯版本名 `memcached-<版本>/`，
@@ -24,9 +26,10 @@ seccomp 沙箱（`--enable-seccomp`，仅 Linux）完整支持。
 
 ```
 memcached-<版本>/
-├── bin/      memcached 主程序（Windows 版还包含运行时 DLL）、memcached-tool 管理脚本
+├── bin/      memcached 主程序、memcached-tool 管理脚本（Windows 版另含运行时 DLL）
+├── lib/      依赖库 .so 与 SASL 机制插件（sasl2/），仅 Linux 包
 ├── include/  占位（memcached 无对外 API 头文件）
-└── share/    文档、手册页、LICENSE（Windows 版另含可选 SASL 机制插件 sasl2/）
+└── share/    文档、手册页、LICENSE
 ```
 
 ## 使用方法
@@ -54,13 +57,14 @@ echo 'user:pass' > pwdb.txt
 MEMCACHED_SASL_PWDB=./pwdb.txt ./bin/memcached -S -u nobody
 ```
 
-PLAIN 机制已静态编入，无需系统 SASL 插件或 `/etc/sasl2/` 配置文件（见下方补丁说明）。
+PLAIN 机制随包分发（Linux：`lib/sasl2/` 插件自动定位；Windows：静态编入），
+无需系统 SASL 插件或 `/etc/sasl2/` 配置文件（见下方补丁说明）。
 需要 SCRAM/GSSAPI 等其他机制时（仅 Windows 包提供机制插件），设置环境变量
 `SASL_PATH` 指向包内 `share/sasl2` 目录。SASL 认证要求二进制协议客户端。
 
 ### TLS
 
-完整支持，随包静态提供 OpenSSL（Linux）/ openssl 3.x（Windows）：
+完整支持，OpenSSL 随包提供（Linux：`lib/` 动态库；Windows：随包 DLL）：
 
 ```bash
 ./bin/memcached -u nobody -Z -o ssl_chain_cert=server.pem -o ssl_key=server.key -p 11212
@@ -112,7 +116,7 @@ libevent/openssl 使用 msys2 系统包版本，由 pacman 管理。
 | 层级 | 内容 | 性质 |
 | --- | --- | --- |
 | L0 官方冒烟 | `make test`：发布包自带的纯 C 测试程序 `testapp`（二进制协议全套操作 + 部分单元测试），自拉起 `memcached-debug` 实例，不依赖 perl | 门禁 |
-| L1 协议冒烟 | `smoke-test.sh` 起多组不同配置的实例，`smoke_test.py` 做协议级断言；Linux 附加 `ldd` 便携性检查（动态依赖只允许 glibc 家族）与静态库 `nm` PLAIN 检查 | 门禁 |
+| L1 协议冒烟 | `smoke-test.sh` 起多组不同配置的实例，`smoke_test.py` 做协议级断言；Linux 附加动态依赖检查（系统库只允许 glibc 家族，其余必须解析到包内 `lib/`） | 门禁 |
 | L2 基准测试 | `benchmark.sh` 用官方压测工具 mc-crusher 跑 4 场景吞吐（get/set × 64B/1KB），结果写入 `benchmark-<平台>-<架构>.txt` 并拼入 Release 说明 | 记录 + 残废检测 |
 
 L1 冒烟的实例分组：
@@ -127,7 +131,7 @@ L1 冒烟的实例分组：
 
 L2 的吞吐数字来自共享 CI runner，波动较大，不作发布门槛；只设极宽的残废检测下限（10k ops/s），防止构建配置错误产出性能崩坏的二进制还照常发布。
 
-> **Windows 包的 SASL 说明**：cyrus-sasl 从源码静态编译（同 Linux 构建），PLAIN 机制直接编入 `memcached.exe`，不依赖任何运行时 SASL 插件或 `SASL_PATH`，解压即用。历史上 Windows 构建曾依赖 MSYS2 系统 libsasl2（PLAIN 是插件 DLL），在无 MSYS2 环境的裸 Windows 上插件路径无法解析导致 `-S` 不可用；现构建脚本在打包后自动做**解压场景验证**（解包产物 + `SASL_PATH` 屏蔽系统插件路径再跑全套冒烟），防止此类问题回归。
+> **SASL 插件随包分发说明**：Linux 包的 cyrus-sasl 动态链接，PLAIN 机制以插件形式位于包内 `lib/sasl2/`，由 `SASL_CB_GETPATH` 回调按可执行文件位置自动定位，无需设置 `SASL_PATH`；Windows 包的 cyrus-sasl 静态编译，PLAIN 直接编入 `memcached.exe`。两个平台都在打包后自动做**解压场景验证**（解包产物 + 屏蔽系统插件路径再跑全套冒烟），防止插件路径类缺陷被构建环境掩盖。历史上 Windows 构建曾依赖 MSYS2 系统 libsasl2（PLAIN 是插件 DLL），在裸 Windows 上插件路径无法解析导致 `-S` 不可用——这正是引入该验证的原因。
 
 ## CI 发布（GitHub Actions）
 
@@ -142,16 +146,19 @@ GitHub Release（tag 为 memcached 版本号）并上传全部产物与校验文
 
 ## 便携补丁说明
 
-`patches/sasl_defs-portable.patch` 对 memcached 源码中 `sasl_defs.c` 做了两处改动，
-让 `-S` 模式在"裸机"上开箱即用：
+`patches/` 对 memcached 源码的 `sasl_defs.c` 做了三处便携改动，让 `-S` 模式在"裸机"上开箱即用：
 
-1. **找不到 SASL 配置文件不视为错误**：上游在 `/etc/sasl2/memcached.conf` 不存在时
-   返回 `SASL_FAIL`，导致 `-S` 直接启动失败。该配置文件只用于逐机制调参，
-   PLAIN 认证并不依赖它。
-2. **不把主机名作为 SASL user_realm**：上游将 `gethostname()` 传给 `sasl_server_new`，
-   cyrus-sasl 会给不含 `@` 的用户名追加 `@主机名`，导致 `MEMCACHED_SASL_PWDB` 里的
-   裸用户名条目（如 `user:pass`）永远匹配不上。去掉 realm 后客户端用户名与 pwdb
-   条目直接对应。
+1. **`sasl_defs-portable.patch`**（两处）：
+   - 找不到 SASL 配置文件不视为错误：上游在 `/etc/sasl2/memcached.conf` 不存在时
+     返回 `SASL_FAIL`，导致 `-S` 直接启动失败。该配置文件只用于逐机制调参，
+     PLAIN 认证并不依赖它。
+   - 不把主机名作为 SASL user_realm：上游将 `gethostname()` 传给 `sasl_server_new`，
+     cyrus-sasl 会给不含 `@` 的用户名追加 `@主机名`，导致 `MEMCACHED_SASL_PWDB` 里的
+     裸用户名条目（如 `user:pass`）永远匹配不上。去掉 realm 后客户端用户名与 pwdb
+     条目直接对应。
+2. **`sasl_defs-plugin-path.patch`**：注册 `SASL_CB_GETPATH` 回调，SASL 插件目录按
+   可执行文件位置推导（`<包根>/bin/../lib/sasl2`），配合包内分发的插件实现
+   解压即用、无需设置 SASL_PATH。
 
 memcached 本身取官方发布包（`memcached.org/files`，自带 configure，无需 autotools）。
 
@@ -166,6 +173,7 @@ memcached 本身取官方发布包（`memcached.org/files`，自带 configure，
 ├── smoke_test.py                          # 协议冒烟客户端（ASCII/二进制/TLS/SASL，py2/3 兼容）
 ├── benchmark.sh                           # L2 基准：mc-crusher 四场景吞吐 + 结果文件
 ├── bench_sample.py                        # 基准采样：stats 计数器速率换算
-├── patches/sasl_defs-portable.patch       # SASL 便携补丁
+├── patches/sasl_defs-portable.patch       # SASL 便携补丁（配置文件 + user_realm）
+├── patches/sasl_defs-plugin-path.patch    # SASL 插件目录按可执行文件位置定位
 └── cache/                                 # 源码包缓存（git 忽略，离线构建用）
 ```
