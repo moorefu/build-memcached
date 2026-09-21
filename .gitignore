@@ -1,0 +1,7 @@
+# 本地源码缓存与构建产物不入库, CI 冷启动自动下载
+cache/
+memcached-*/
+*.tar.xz
+*.tar.xz.sha256
+*.zip
+*.zip.sha256

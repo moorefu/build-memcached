@@ -1,0 +1,211 @@
+name: Build memcached
+
+permissions:
+  contents: write
+
+on:
+  workflow_call:
+    inputs:
+      release_version:
+        required: true
+        type: string
+      openssl_version:
+        required: false
+        type: string
+        default: '3.5.6'
+      libevent_version:
+        required: false
+        type: string
+        default: '2.1.12-stable'
+      libseccomp_version:
+        required: false
+        type: string
+        default: '2.5.5'
+      cyrus_sasl_version:
+        required: false
+        type: string
+        default: '2.1.28'
+      make_latest:
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      release_version:
+        description: "The version of memcached being built"
+        value: ${{ jobs.prepare.outputs.release_version }}
+
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'memcached version to build (e.g. 1.6.45)'
+        required: true
+        type: string
+        default: '1.6.45'
+      openssl_version:
+        description: 'OpenSSL version (Linux static)'
+        required: false
+        type: string
+        default: '3.5.6'
+      libevent_version:
+        description: 'libevent version (Linux static)'
+        required: false
+        type: string
+        default: '2.1.12-stable'
+      libseccomp_version:
+        description: 'libseccomp version (Linux static)'
+        required: false
+        type: string
+        default: '2.5.5'
+      cyrus_sasl_version:
+        description: 'cyrus-sasl version (Linux static)'
+        required: false
+        type: string
+        default: '2.1.28'
+      make_latest:
+        description: 'Mark as latest release'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Mark as prerelease'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.setup.outputs.version }}
+      openssl_version: ${{ steps.setup.outputs.openssl_version }}
+      libevent_version: ${{ steps.setup.outputs.libevent_version }}
+      libseccomp_version: ${{ steps.setup.outputs.libseccomp_version }}
+      cyrus_sasl_version: ${{ steps.setup.outputs.cyrus_sasl_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        id: setup
+        run: |
+          echo "version=${{ inputs.release_version }}" >> $GITHUB_OUTPUT
+          echo "openssl_version=${{ inputs.openssl_version }}" >> $GITHUB_OUTPUT
+          echo "libevent_version=${{ inputs.libevent_version }}" >> $GITHUB_OUTPUT
+          echo "libseccomp_version=${{ inputs.libseccomp_version }}" >> $GITHUB_OUTPUT
+          echo "cyrus_sasl_version=${{ inputs.cyrus_sasl_version }}" >> $GITHUB_OUTPUT
+
+  build-linux:
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            image: quay.io/pypa/manylinux2014_x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux2014_aarch64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build in manylinux container
+        env:
+          BIND_VERSION: ${{ needs.prepare.outputs.release_version }}
+          OS_VER: ${{ needs.prepare.outputs.openssl_version }}
+          LIBEVENT_VER: ${{ needs.prepare.outputs.libevent_version }}
+          LIBSECCOMP_VER: ${{ needs.prepare.outputs.libseccomp_version }}
+          CYRUS_SASL_VER: ${{ needs.prepare.outputs.cyrus_sasl_version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker run --rm \
+            -e BIND_VERSION -e OS_VER -e LIBEVENT_VER -e LIBSECCOMP_VER -e CYRUS_SASL_VER -e ARCH \
+            -v "$(pwd)":/work -w /work \
+            ${{ matrix.image }} \
+            bash -c 'bash ci-fix-yum-repos.sh && bash build-memcached.sh "$BIND_VERSION" "$OS_VER" "$LIBEVENT_VER" "$LIBSECCOMP_VER" "$CYRUS_SASL_VER" "$ARCH"'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcached-linux-${{ matrix.arch }}
+          path: |
+            memcached-*-linux-glibc2.17-${{ matrix.arch }}-openssl-*.tar.xz
+            memcached-*-linux-glibc2.17-${{ matrix.arch }}-openssl-*.tar.xz.sha256
+
+  build-windows:
+    needs: prepare
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # MSYS2 运行时工具链(完整 POSIX): memcached 是纯 Unix 代码, mingw64 缺
+      # sys/socket.h 等头文件。依赖用 msys2 系统包(libevent/openssl 3.x/cyrus-sasl),
+      # memcached 官方发布包自带 configure(自带 autotools 产物, msys2 的
+      # autoconf 2.73 不兼容其 configure.ac), 无需安装 autotools。
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            gcc
+            gperf
+            perl
+            python
+            zip
+            curl
+            libevent
+            libevent-devel
+            libopenssl
+            openssl-devel
+            libsasl
+            libsasl-devel
+
+      - name: Build with MSYS2
+        shell: msys2 {0}
+        env:
+          BIND_VERSION: ${{ needs.prepare.outputs.release_version }}
+          ARCH: x86_64
+        run: bash build-memcached-win.sh "$BIND_VERSION" "$ARCH"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcached-windows-x86_64
+          path: |
+            memcached-*-windows-x86_64-msys2.zip
+            memcached-*-windows-x86_64-msys2.zip.sha256
+
+  release:
+    needs: [prepare, build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set version
+        run: |
+          echo "VERSION=${{ needs.prepare.outputs.release_version }}" >> $GITHUB_ENV
+          echo "OS_VER=${{ needs.prepare.outputs.openssl_version }}" >> $GITHUB_ENV
+
+      - uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: memcached ${{ env.VERSION }}
+          tag_name: ${{ env.VERSION }}
+          make_latest: "${{ inputs.make_latest }}"
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64-openssl-${{ env.OS_VER }}.tar.xz
+            memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64-openssl-${{ env.OS_VER }}.tar.xz.sha256
+            memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64-openssl-${{ env.OS_VER }}.tar.xz
+            memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64-openssl-${{ env.OS_VER }}.tar.xz.sha256
+            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-msys2.zip
+            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-msys2.zip.sha256
