@@ -54,8 +54,21 @@ done
 log "安装构建工具"
 # libevent-devel: 基准工具 mc-crusher 的编译依赖 (memcached 用包内自编 libevent)
 # perl-URI: 冒烟中 memcached-tool 的依赖 (URI::Escape)
-# patchelf: 打包时把 rpath 改写为 $ORIGIN 相对路径 (manylinux 镜像一般自带)
-yum install -y curl pkgconfig perl-core autoconf automake libtool gperf libevent-devel perl-URI patchelf
+# patchelf: 打包时把 rpath 改写为 $ORIGIN 相对路径;
+#   x86_64 镜像预装 / vault 源可装, aarch64 两者皆无 → 源码编译兜底
+yum install -y curl pkgconfig perl-core autoconf automake libtool gperf libevent-devel perl-URI patchelf || true
+if ! command -v patchelf >/dev/null 2>&1; then
+  log "源码编译 patchelf (仓库源无此包)"
+  (
+    cd /tmp
+    download "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0.tar.gz"
+    tar -xzf patchelf-0.18.0.tar.gz
+    cd patchelf-0.18.0
+    ./configure --prefix=/usr/local
+    make -j"$NPROC"
+    make install
+  )
+fi
 command -v patchelf >/dev/null 2>&1 || { echo "错误: 需要 patchelf" >&2; exit 1; }
 # OpenSSL 3.x 的 Configure 额外依赖 IPC::Cmd/Text::Template/Time::Piece(epel 提供);
 # EPEL7 已 EOL, 源切到阿里云 epel-archive(含 x86_64/aarch64), 只动 epel 不动基础源。
