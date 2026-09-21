@@ -23,7 +23,10 @@ WORK=/tmp/mc-bench
 NPROC=$(nproc)
 PORT=12321
 DUR=10          # 每场景压测秒数
-MIN_OPS=10000   # 残废检测下限 (ops/s)
+# 残废检测下限 (ops/s): 仅用于拦截"构建配置错误导致性能崩坏"(那类产物
+# 只有百级 ops/s), 不作性能门槛。取 3000 为 Linux 正常吞吐(数万)的零头,
+# 同时给 Windows MSYS 运行时(约 1 万上下, 共享 runner 波动大)留足余量
+MIN_OPS=3000
 
 log() { echo "==> $*" >&2; }
 
