@@ -50,7 +50,7 @@ cd memcached-1.6.45
 bin\memcached.exe -p 11211 -m 64
 ```
 
-### SASL 认证（PLAIN 机制已内置）
+### SASL 认证（PLAIN 机制）
 
 ```bash
 echo 'user:pass' > pwdb.txt
@@ -59,8 +59,9 @@ MEMCACHED_SASL_PWDB=./pwdb.txt ./bin/memcached -S -u nobody
 
 PLAIN 机制随包分发（Linux：`lib/sasl2/` 插件自动定位；Windows：静态编入），
 无需系统 SASL 插件或 `/etc/sasl2/` 配置文件（见下方补丁说明）。
-需要 SCRAM/GSSAPI 等其他机制时（仅 Windows 包提供机制插件），设置环境变量
-`SASL_PATH` 指向包内 `share/sasl2` 目录。SASL 认证要求二进制协议客户端。
+构建时只启用了 PLAIN/ANONYMOUS（Linux）两种机制，如需 SCRAM/GSSAPI 等其他
+机制，需自行编译对应插件并设置 `SASL_PATH` 指向插件目录。
+SASL 认证要求二进制协议客户端。
 
 ### TLS
 
@@ -95,6 +96,24 @@ docker run --rm -v "$(pwd)":/work -w /work \
 | 6 | 目标架构 | `uname -m` |
 
 依赖源码包会优先复用 `cache/` 目录（便于离线/本地构建），CI 冷启动时自动下载。
+构建还依赖 patchelf（打包时把 rpath 改写为 `$ORIGIN` 相对路径）：manylinux 镜像
+已预装；缺失时脚本自动从 [patchelf 官方 release](https://github.com/NixOS/patchelf)
+下载对应架构的二进制（glibc 2.17 可运行），再不行则源码编译兜底。
+
+### 为什么解压到任意目录都能直接运行
+
+产物不依赖任何安装步骤或补丁脚本，机制如下：
+
+- `bin/memcached` 的 rpath 为 `$ORIGIN/../lib`——`$ORIGIN` 由 ELF 动态加载器在
+  **运行时**解析为可执行文件自身所在目录，因此无论包被解压到哪个路径，
+  `../lib` 永远指向包内的 `lib/` 目录；
+- 包内 `lib/` 里的 `.so` 自身 rpath 为 `$ORIGIN`，互相依赖（如 libssl 找
+  libcrypto）也在包内解决；
+- SASL 插件目录由 memcached 内的 `SASL_CB_GETPATH` 回调按可执行文件位置推导
+  （补丁实现，见下文），同样与安装路径无关；
+- patchelf 只在**构建机**上运行一次（打包期改写 rpath），不随包分发，用户侧
+  无任何工具要求。每次构建打包后自动做解压场景验证（解包到任意临时目录 +
+  屏蔽系统插件路径跑全套冒烟）持续保障这一特性。
 
 ### Windows（MSYS2）
 
@@ -126,10 +145,10 @@ L1 冒烟的实例分组：
 | 普通 `-m 64 -t 4` | ASCII 协议全套（set/get/add/replace/append/prepend/cas/incr/decr/touch/TTL/flush_all/stats）、大 value 边界（≈1MB 成功、超限拒绝）、二进制协议 set/get/delete、`memcached-tool` |
 | 小内存 `-m 16` | LRU 逐出（灌数据后 `evictions > 0`） |
 | TLS `-Z` | 自签证书启动，TLS 连接上 set/get/version |
-| SASL `-S` | PLAIN 三断言：机制已编入、正确密码通过、错误密码拒绝 |
+| SASL `-S` | PLAIN 三断言：机制可用、正确密码通过、错误密码拒绝 |
 | 沙箱 `-o drop_privileges`（仅 Linux） | seccomp 下正常启动、读写正常、SIGTERM 可正常退出 |
 
-L2 的吞吐数字来自共享 CI runner，波动较大，不作发布门槛；只设极宽的残废检测下限（10k ops/s），防止构建配置错误产出性能崩坏的二进制还照常发布。
+L2 的吞吐数字来自共享 CI runner，波动较大，不作发布门槛；只设极宽的残废检测下限（3k ops/s，仅为正常吞吐的零头，Windows MSYS 运行时约 1 万上下且波动大），防止构建配置错误产出性能崩坏的二进制还照常发布。
 
 > **SASL 插件随包分发说明**：Linux 包的 cyrus-sasl 动态链接，PLAIN 机制以插件形式位于包内 `lib/sasl2/`，由 `SASL_CB_GETPATH` 回调按可执行文件位置自动定位，无需设置 `SASL_PATH`；Windows 包的 cyrus-sasl 静态编译，PLAIN 直接编入 `memcached.exe`。两个平台都在打包后自动做**解压场景验证**（解包产物 + 屏蔽系统插件路径再跑全套冒烟），防止插件路径类缺陷被构建环境掩盖。历史上 Windows 构建曾依赖 MSYS2 系统 libsasl2（PLAIN 是插件 DLL），在裸 Windows 上插件路径无法解析导致 `-S` 不可用——这正是引入该验证的原因。
 
